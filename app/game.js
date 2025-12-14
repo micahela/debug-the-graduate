@@ -135,14 +135,6 @@ const QUESTIONS = [
         options: ['Puerto Rico', 'Jamaica', 'Costa Rica', 'Europe'],
         correct_indices: [1,2], // multiple correct
         time_limit_seconds: 20
-    },
-    {
-        text: "What's an expression Micahela often uses?",
-        type: 'wordcloud', // special free-text question (no points)
-        image: require('../assets/Q19.jpg'),
-        options: [],
-        correct_indices: [],
-        time_limit_seconds: 30
     }
 ];
 
@@ -177,13 +169,16 @@ export default function Game() {
 
   // subscribe to game changes
   useEffect(() => {
+    // On web, params can be undefined briefly on first render; don't hit Supabase until ready
+    if (!code || !gid) return;
     const ch = supabase
       .channel('game-' + code)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'games', filter: `code=eq.${code}` },
         (payload) => {
-          const g = payload.new;
+          const g = payload?.new || payload?.record || payload?.old;
+          if (!g) return;
           setGame(g);
 
           if (g.status === 'finished') {
@@ -208,14 +203,19 @@ export default function Game() {
       .subscribe();
 
     (async () => {
-      const { data: g } = await supabase.from('games').select('*').eq('id', gid).single();
+      const { data: g, error } = await supabase.from('games').select('*').eq('id', gid).single();
+      if (error) {
+        console.error('Failed to load game:', error);
+        Alert.alert('Connection error', error.message || 'Failed to load game from Supabase.');
+        return;
+      }
       setGame(g);
     })();
 
     return () => {
       supabase.removeChannel(ch);
     };
-  }, [gid, code]);
+  }, [gid, code, pid]);
 
   // Live wordcloud for host during the wordcloud question
   useEffect(() => {
@@ -367,7 +367,12 @@ export default function Game() {
       payload.is_correct = isCorrect;
     }
 
-    await supabase.from('answers').insert(payload);
+    const { error } = await supabase.from('answers').insert(payload);
+    if (error) {
+      console.error('Submit failed:', error);
+      Alert.alert('Submit failed', error.message || 'Could not submit your answer.');
+      return;
+    }
     setSubmitted(true);
   }
 
@@ -377,10 +382,15 @@ export default function Game() {
     if (phase !== 'reveal') return;
     const next = (game.current_question_index || 0) + 1;
     if (next >= QUESTIONS.length) {
-      await supabase.from('games').update({ status: 'finished' }).eq('id', gid);
+      const { error } = await supabase.from('games').update({ status: 'finished' }).eq('id', gid);
+      if (error) {
+        console.error('Finish failed:', error);
+        Alert.alert('Could not finish game', error.message || 'Supabase update failed.');
+        return;
+      }
       router.push({ pathname: '/results', params: { gid, code } });
     } else {
-      await supabase
+      const { error } = await supabase
         .from('games')
         .update({
           status: 'question',
@@ -388,6 +398,12 @@ export default function Game() {
           question_started_at: new Date().toISOString()
         })
         .eq('id', gid);
+
+      if (error) {
+        console.error('Next question failed:', error);
+        Alert.alert('Could not advance', error.message || 'Supabase update failed.');
+        return;
+      }
       setSubmitted(false);
       setFreeForm('');
     }
