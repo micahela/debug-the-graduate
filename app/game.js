@@ -378,8 +378,6 @@ export default function Game() {
 
   async function nextOrReveal() {
     if (!game) return;
-    // Only allow advancing when we're already in reveal phase.
-    if (phase !== 'reveal') return;
     const next = (game.current_question_index || 0) + 1;
     if (next >= QUESTIONS.length) {
       const { error } = await supabase.from('games').update({ status: 'finished' }).eq('id', gid);
@@ -407,6 +405,63 @@ export default function Game() {
       setSubmitted(false);
       setFreeForm('');
     }
+  }
+
+  // Host-only: reveal now (flip to reveal immediately)
+  async function revealNow() {
+    if (!game) return;
+    const isHost = !pid;
+    if (!isHost) return;
+
+    const { error } = await supabase.from('games').update({ status: 'reveal' }).eq('id', gid);
+    if (error) {
+      console.error('Reveal now failed:', error);
+      Alert.alert('Could not reveal', error.message || 'Supabase update failed.');
+      return;
+    }
+    setPhase('reveal');
+  }
+
+  // Host-only: skip question (advance to next question or finish)
+  async function skipQuestion() {
+    if (!game) return;
+    const isHost = !pid;
+    if (!isHost) return;
+
+    const next = (game.current_question_index || 0) + 1;
+
+    // If we're at the end, finish.
+    if (next >= QUESTIONS.length) {
+      const { error } = await supabase.from('games').update({ status: 'finished' }).eq('id', gid);
+      if (error) {
+        console.error('Finish (skip) failed:', error);
+        Alert.alert('Could not finish game', error.message || 'Supabase update failed.');
+        return;
+      }
+      router.push({ pathname: '/results', params: { gid, code } });
+      return;
+    }
+
+    const { error } = await supabase
+      .from('games')
+      .update({
+        status: 'question',
+        current_question_index: next,
+        question_started_at: new Date().toISOString()
+      })
+      .eq('id', gid);
+
+    if (error) {
+      console.error('Skip failed:', error);
+      Alert.alert('Could not skip', error.message || 'Supabase update failed.');
+      return;
+    }
+
+    // Reset local UI state immediately (clients will also update via realtime)
+    setPhase('question');
+    setSelected([]);
+    setSubmitted(false);
+    setFreeForm('');
   }
 
   async function cancelGame() {
@@ -589,10 +644,23 @@ export default function Game() {
                 </Text>
               )}
 
-              {hostView && phase === 'reveal' && (
-                <TouchableOpacity style={styles.host} onPress={nextOrReveal}>
-                  <Text style={styles.btntxt}>Next Question</Text>
-                </TouchableOpacity>
+              {hostView && (
+                <View style={{ gap: 10 }}>
+                  {phase === 'question' ? (
+                    <>
+                      <TouchableOpacity style={styles.host} onPress={revealNow}>
+                        <Text style={styles.btntxt}>REVEAL NOW</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={styles.hostSecondary} onPress={skipQuestion}>
+                        <Text style={styles.btntxt}>SKIP</Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : (
+                    <TouchableOpacity style={styles.host} onPress={nextOrReveal}>
+                      <Text style={styles.btntxt}>Next Question</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
               )}
             </ScrollView>
           </TerminalView>
@@ -642,6 +710,7 @@ const styles = StyleSheet.create({
   submit: { backgroundColor:  'rgba(0, 255, 0, 0.7)', borderWidth:5, padding:14, borderRadius:8, alignItems:'center', marginTop: 130 },
   reveal: { fontFamily: 'Courier New Bold', fontSize: 20, textAlign: 'center', marginTop: 8 },
   host: {backgroundColor:  'rgba(79, 191, 251, 0.9)' , borderWidth: 5, padding: 12, borderRadius: 8, alignItems: 'center' },
+  hostSecondary: { backgroundColor: 'rgba(255, 174, 0, 0.18)', borderWidth: 2, borderColor: colors.orange, padding: 12, borderRadius: 8, alignItems: 'center' },
   optDisabled: { borderColor: colors.gray, backgroundColor: 'rgba(107,114,128,0.2)' },
   submitDisabled: { borderColor: colors.gray, opacity: 0.6 },
   input: { borderColor: colors.blue, borderWidth: 1, borderRadius: 8, padding: 12, color: colors.white, fontFamily: 'Courier New Bold' },
